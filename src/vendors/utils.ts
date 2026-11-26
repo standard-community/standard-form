@@ -10,13 +10,40 @@
  * Implementations should return `formData` untouched when handed a schema they cannot
  * introspect, so that validation — rather than the coercion — reports the mismatch.
  */
-export type ToFormInputFn = (schema: unknown, formData: FormData) => unknown;
+export type ToFormInputFn = (schema: unknown, formData: FormData, options: Options) => unknown;
+
+export interface Options {
+	convertEmptyStringsToNull?: boolean | undefined;
+};
+
+const trueFormValues = new Set(['on', '1', 'yes', 'true']);
+
+export function isTrueFormValue(value: unknown): boolean {
+	return typeof value === 'string' && trueFormValues.has(value);
+}
+
+export function coerceFormNumber(value: FormDataEntryValue | null): FormDataEntryValue | number | null {
+	return value === null || value === '' ? value : Number(value);
+}
+
+export function hasFormDataKeyWithPrefix(keys: Iterable<string>, prefix: string): boolean {
+	for (const key of keys) {
+		if (key.startsWith(prefix)) return true;
+	}
+	return false;
+}
+
+export function hasFormDataKeyOrNested(keys: Iterable<string>, key: string): boolean {
+	return hasFormDataKeyWithPrefix(keys, `${key}.`) || hasFormDataKeyWithPrefix(keys, key);
+}
 
 export const validationMapper = new Map<string, ToFormInputFn>();
 
 export class UnsupportedVendorError extends Error {
 	constructor(vendor: string) {
-		super(`standard-form: Unsupported schema vendor "${vendor}".`);
+		super(
+			`standard-form: Unsupported schema vendor "${vendor}". Request built-in support at https://github.com/standard-community/standard-form/issues or register a handler with loadVendor().`,
+		);
 	}
 }
 

@@ -1,8 +1,16 @@
 import type * as zCore from 'zod/v4/core';
-import { type ToFormInputFn, UnsupportedSchemaError } from './utils.js';
+import {
+	hasFormDataKeyOrNested,
+	hasFormDataKeyWithPrefix,
+	coerceFormNumber,
+	isTrueFormValue,
+	type Options,
+	type ToFormInputFn,
+	UnsupportedSchemaError,
+} from './utils.js';
 
 export default async function (): Promise<ToFormInputFn> {
-	return (schema, formData) => {
+	return (schema, formData, options) => {
 		// Zod recommends branching on the schema rather than the installed version.
 		// https://zod.dev/library-authors#how-to-support-zod-3-and-zod-4-simultaneously
 		if (!isZodSchema(schema)) {
@@ -10,7 +18,7 @@ export default async function (): Promise<ToFormInputFn> {
 		}
 		const baseSchema = unwrapBaseObjectSchema(schema, formData);
 		return hasZodType<zCore.$ZodObject>(baseSchema, 'object')
-			? formDataToObject(formData, baseSchema)
+			? formDataToObject(formData, baseSchema, '', options)
 			: formData;
 	};
 }
@@ -42,6 +50,7 @@ function formDataToObject<T extends zCore.$ZodObject>(
 	formData: FormData,
 	schema: T,
 	prefix = '',
+	options: Options = {},
 ): Record<string, unknown> {
 	const formKeys = [...formData.keys()];
 	const obj: Record<string, unknown> = schema._zod.def.catchall
@@ -63,7 +72,7 @@ function formDataToObject<T extends zCore.$ZodObject>(
 			// use default value when key is undefined
 			if (
 				hasZodType<zCore.$ZodDefault>(validator, 'default') &&
-				!formDataHasKeyOrPrefix(formKeys, prefixedKey)
+			!hasFormDataKeyOrNested(formKeys, prefixedKey)
 			) {
 				obj[key] =
 					validator._zod.def.defaultValue instanceof Function
@@ -94,9 +103,9 @@ function formDataToObject<T extends zCore.$ZodObject>(
 
 		if (hasZodType<zCore.$ZodObject>(validator, 'object')) {
 			const nestedPrefix = prefixedKey + '.';
-			const hasNestedKeys = formKeys.some((k) => k.startsWith(nestedPrefix));
+			const hasNestedKeys = hasFormDataKeyWithPrefix(formKeys, nestedPrefix);
 			if (hasNestedKeys) {
-				obj[key] = formDataToObject(formData, validator, nestedPrefix);
+				obj[key] = formDataToObject(formData, validator, nestedPrefix, options);
 			} else if (!(key in obj)) {
 				// No nested keys and no default was set — respect optional/nullable
 				obj[key] = hasZodType<zCore.$ZodNullable>(baseValidator, 'nullable') ? null : undefined;
@@ -106,29 +115,41 @@ function formDataToObject<T extends zCore.$ZodObject>(
 			continue;
 		} else if (hasZodType<zCore.$ZodBoolean>(validator, 'boolean')) {
 			const val = formData.get(prefixedKey);
-			obj[key] = val === 'true' ? true : val === 'false' ? false : formData.has(prefixedKey);
+			obj[key] = isTrueFormValue(val)
+				? true
+				: val === 'false'
+					? false
+					: formData.has(prefixedKey);
 		} else if (hasZodType<zCore.$ZodArray>(validator, 'array')) {
-			obj[key] = handleFormDataGetAll(prefixedKey, formData, validator);
+			obj[key] = handleFormDataGetAll(prefixedKey, formData, validator, options);
 		} else {
-			obj[key] = handleFormDataGet(prefixedKey, formData, validator, baseValidator);
+			obj[key] = handleFormDataGet(prefixedKey, formData, validator, baseValidator, options);
 		}
 	}
 	return obj;
 }
 
-/** Check if formKeys contains an exact key or any keys with the given prefix (for nested objects). */
-function formDataHasKeyOrPrefix(formKeys: string[], key: string): boolean {
-	const prefix = key + '.';
-	return formKeys.some((k) => k === key || k.startsWith(prefix));
-}
-
-function handleFormDataGetAll(key: string, formData: FormData, validator: zCore.$ZodArray) {
+function handleFormDataGetAll(
+	key: string,
+	formData: FormData,
+	validator: zCore.$ZodArray,
+	options: Options,
+) {
 	const entries = Array.from(formData.getAll(key));
 	const elementValidator = validator._zod.def.element;
 	if (hasZodType<zCore.$ZodNumber>(elementValidator, 'number')) {
-		return entries.map(Number);
+		return entries.map((value) => coerceFormNumber(value));
 	} else if (hasZodType<zCore.$ZodBoolean>(elementValidator, 'boolean')) {
-		return entries.map((v) => (v === 'true' ? true : v === 'false' ? false : Boolean(v)));
+		return entries.map((v) =>
+			isTrueFormValue(v)
+				? true
+				: v === 'false'
+					? false
+					: Boolean(v),
+		);
+	}
+	if (options.convertEmptyStringsToNull && hasZodType<zCore.$ZodString>(elementValidator, 'string')) {
+		return entries.map((value) => value === '' ? null : value);
 	}
 	return entries;
 }
@@ -138,12 +159,16 @@ function handleFormDataGet(
 	formData: FormData,
 	validator: unknown,
 	baseValidator: unknown,
+	options: Options,
 ) {
 	const value = formData.get(key);
 	if (!value) {
 		return hasZodType<zCore.$ZodOptional>(baseValidator, 'optional') ? undefined : null;
 	}
-	return hasZodType<zCore.$ZodNumber>(validator, 'number') ? Number(value) : value;
+	if (options.convertEmptyStringsToNull && value === '' && hasZodType<zCore.$ZodString>(validator, 'string')) {
+		return null;
+	}
+	return hasZodType<zCore.$ZodNumber>(validator, 'number') ? coerceFormNumber(value) : value;
 }
 
 function unwrapBaseObjectSchema(schema: zCore.$ZodType, unparsedInput: FormData) {

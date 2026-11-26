@@ -13,6 +13,8 @@ testVendorContract('arktype', {
 	asyncSchema: null,
 	formDataSchema: type.instanceOf(FormData),
 	booleanArraySchema: type({ flags: type('boolean[]') }),
+	checkboxSchema: type({ checked: 'boolean', unchecked: 'boolean' }),
+	nullableStringSchema: type({ value: 'string | null', nested: { value: 'string | null' } }),
 	nestedSchema: type({
 		settings: type({ theme: 'string' }).default(() => ({ theme: 'dark' })),
 	}),

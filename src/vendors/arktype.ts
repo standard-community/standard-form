@@ -1,10 +1,16 @@
 import type { BaseType } from 'arktype';
-import type { ToFormInputFn } from './utils.js';
+import {
+	hasFormDataKeyWithPrefix,
+	coerceFormNumber,
+	isTrueFormValue,
+	type ToFormInputFn,
+	type Options,
+} from './utils.js';
 
 type ArkTypeNode = BaseType['internal'];
 
 export default async function (): Promise<ToFormInputFn> {
-	return (schema, formData) => {
+	return (schema, formData, options) => {
 		if (!isArkTypeSchema(schema)) return formData;
 		let structure: ArkTypeNode | undefined = schema.internal;
 		while (structure && getValue(structure, 'kind') === 'morph') {
@@ -14,8 +20,9 @@ export default async function (): Promise<ToFormInputFn> {
 		}
 		const nestedStructure = structure && getValue(structure, 'structure');
 		if (isNode(nestedStructure)) structure = nestedStructure;
-		if (!structure || !hasObjectProperties(structure)) return formData;
-		return convertObject(formData, structure);
+		return !structure || !hasObjectProperties(structure)
+			? formData
+			: convertObject(formData, structure, '', options);
 	};
 }
 
@@ -35,7 +42,7 @@ function getValue(value: unknown, key: string): unknown {
 	return isRecord(value) ? value[key] : undefined;
 }
 
-function convertObject(formData: FormData, node: ArkTypeNode, prefix = '') {
+function convertObject(formData: FormData, node: ArkTypeNode, prefix = '', options: Options) {
 	const result: Record<string, unknown> = {};
 	const structure = getValue(node, 'structure');
 	const properties = isNode(structure) ? structure : node;
@@ -78,29 +85,39 @@ function convertObject(formData: FormData, node: ArkTypeNode, prefix = '') {
 				const typeValue = getValue(typeProperty, 'value');
 				return getValue(typeValue, 'unit') === variant;
 			});
-			result[key] = isNode(branch) ? convertObject(formData, branch, `${name}.`) : null;
+			result[key] = isNode(branch) ? convertObject(formData, branch, `${name}.`, options) : null;
 		} else if (Array.isArray(sequence)) {
-			result[key] = formData.getAll(name).map((value) => coerce(value, sequence[0]));
+			result[key] = formData.getAll(name).map((value) => coerce(value, sequence[0], options));
 		} else if (isArrayExpression(childNode)) {
-			result[key] = formData.getAll(name).map((value) => coerce(value, childNode));
+			result[key] = formData.getAll(name).map((value) => coerce(value, childNode, options));
 		} else if (isNode(getValue(childNode, 'structure')) || hasObjectProperties(childNode)) {
 			const nestedPrefix = `${name}.`;
-			const hasNestedKeys = [...formData.keys()].some((formKey) => formKey.startsWith(nestedPrefix));
+			const hasNestedKeys = hasFormDataKeyWithPrefix(formData.keys(), nestedPrefix);
 			const nested = getValue(childNode, 'structure');
 			const defaultValue = getValue(property, 'default');
 			result[key] = hasNestedKeys && isNode(nested)
-				? convertObject(formData, nested, nestedPrefix)
+				? convertObject(formData, nested, nestedPrefix, options)
 				: typeof defaultValue === 'function'
 					? defaultValue()
 					: {};
 		} else if (matches(childNode, 'boolean')) {
 			const value = formData.get(name);
-			result[key] = value === 'true' ? true : value === 'false' ? false : formData.has(name);
+			result[key] = isTrueFormValue(value)
+				? true
+				: value === 'false'
+					? false
+					: formData.has(name);
 		} else if (matches(childNode, 'number')) {
 			const value = formData.get(name);
-			result[key] = value === null ? getValue(childNode, 'default') ?? value : value === '' ? value : Number(value);
+			result[key] =
+				value === null
+					? getValue(childNode, 'default') ?? value
+					: coerceFormNumber(value);
 		} else {
-			result[key] = formData.get(name);
+			const value = formData.get(name);
+			result[key] = options.convertEmptyStringsToNull && value === '' && matches(childNode, 'string')
+				? null
+				: value;
 		}
 	}
 	return result;
@@ -125,8 +142,11 @@ function matches(node: unknown, kind: string) {
 	return getValue(node, 'domain') === kind || expression === kind || (typeof expression === 'string' && expression.includes(kind));
 }
 
-function coerce(value: FormDataEntryValue, node: unknown) {
-	if (matches(node, 'number')) return Number(value);
-	if (matches(node, 'boolean')) return value === 'true';
+function coerce(value: FormDataEntryValue, node: unknown, options: Options) {
+	if (options.convertEmptyStringsToNull && value === '' && matches(node, 'string')) return null;
+	if (matches(node, 'number')) return coerceFormNumber(value);
+	if (matches(node, 'boolean')) {
+		return isTrueFormValue(value);
+	}
 	return value;
 }
