@@ -1,166 +1,160 @@
-import type * as zCore from 'zod/v4/core';
 import { type ToFormInputFn, UnsupportedSchemaError } from './utils.js';
+
+type RecordValue = Record<string, unknown>;
 
 export default async function (): Promise<ToFormInputFn> {
 	return (schema, formData) => {
-		// Zod recommends branching on the schema rather than the installed version.
-		// https://zod.dev/library-authors#how-to-support-zod-3-and-zod-4-simultaneously
-		if (!isZodSchema(schema)) {
+		if (!isSchema(schema)) {
 			throw new UnsupportedSchemaError('zod', 'Zod 4 and higher is required');
 		}
-		const baseSchema = unwrapBaseObjectSchema(schema, formData);
-		return hasZodType<zCore.$ZodObject>(baseSchema, 'object')
-			? formDataToObject(formData, baseSchema)
-			: formData;
+		const objectSchema = getObjectSchema(schema, formData);
+		return objectSchema ? convertObject(formData, objectSchema) : formData;
 	};
 }
 
-function isZodSchema(schema: unknown): schema is zCore.$ZodType {
-	return typeof schema === 'object' && schema !== null && '_zod' in schema;
+function isRecord(value: unknown): value is RecordValue {
+	return typeof value === 'object' && value !== null;
 }
 
-/**
- * Narrows `schema` by its Zod kind.
- *
- * The kind lives on `_zod.def.type`, so the coercion can dispatch without importing
- * Zod at runtime. This module ships whenever the form parser is bundled, including in
- * apps that never validate a form with Zod.
- */
-function hasZodType<T extends zCore.$ZodType>(
-	schema: unknown,
-	type: T['_zod']['def']['type'],
-): schema is T {
-	return isZodSchema(schema) && schema._zod.def.type === type;
+function get(value: unknown, key: string): unknown {
+	return isRecord(value) ? value[key] : undefined;
 }
 
-function isDiscriminatedUnion(schema: zCore.$ZodType): schema is zCore.$ZodDiscriminatedUnion {
-	return schema._zod.def.type === 'union' && 'discriminator' in schema._zod.def;
+function definition(schema: unknown): RecordValue | undefined {
+	const internal = get(schema, '_zod');
+	const def = get(internal, 'def');
+	return isRecord(def) ? def : undefined;
 }
 
-/** Transform form data to an object based on a Zod schema. */
-function formDataToObject<T extends zCore.$ZodObject>(
-	formData: FormData,
-	schema: T,
-	prefix = '',
-): Record<string, unknown> {
-	const formKeys = [...formData.keys()];
-	const obj: Record<string, unknown> = schema._zod.def.catchall
-		? Object.fromEntries(
-				[...formData.entries()]
-					.filter(([k]) => k.startsWith(prefix))
-					.map(([k, v]) => [k.slice(prefix.length), v]),
-			)
-		: {};
-	for (const [key, baseValidator] of Object.entries(schema._zod.def.shape)) {
-		const prefixedKey = prefix + key;
-		let validator = baseValidator;
+function isSchema(value: unknown): boolean {
+	return typeof get(definition(value), 'type') === 'string';
+}
 
-		while (
-			hasZodType<zCore.$ZodOptional>(validator, 'optional') ||
-			hasZodType<zCore.$ZodNullable>(validator, 'nullable') ||
-			hasZodType<zCore.$ZodDefault>(validator, 'default')
-		) {
-			// use default value when key is undefined
-			if (
-				hasZodType<zCore.$ZodDefault>(validator, 'default') &&
-				!formDataHasKeyOrPrefix(formKeys, prefixedKey)
-			) {
-				obj[key] =
-					validator._zod.def.defaultValue instanceof Function
-						? validator._zod.def.defaultValue()
-						: validator._zod.def.defaultValue;
-			}
-			validator = validator._zod.def.innerType;
-		}
+function schemaType(schema: unknown): string | undefined {
+	const type = get(definition(schema), 'type');
+	return typeof type === 'string' ? type : undefined;
+}
 
-		// Unwrap pipe (from .transform() / .pipe()) to find nested objects
-		while (hasZodType<zCore.$ZodPipe>(validator, 'pipe')) {
-			validator = validator._zod.def.in;
-		}
-
-		// Resolve nested discriminatedUnion to the matching variant
-		if (isDiscriminatedUnion(validator)) {
-			const typeKey = validator._zod.def.discriminator;
-			const typeValue = formData.get(prefixedKey + '.' + typeKey);
-			if (typeof typeValue === 'string') {
-				const match = validator._zod.def.options.find((option: any) =>
-					option.def.shape[typeKey].values.has(typeValue),
-				);
-				if (match) {
-					validator = match;
-				}
-			}
-		}
-
-		if (hasZodType<zCore.$ZodObject>(validator, 'object')) {
-			const nestedPrefix = prefixedKey + '.';
-			const hasNestedKeys = formKeys.some((k) => k.startsWith(nestedPrefix));
-			if (hasNestedKeys) {
-				obj[key] = formDataToObject(formData, validator, nestedPrefix);
-			} else if (!(key in obj)) {
-				// No nested keys and no default was set — respect optional/nullable
-				obj[key] = hasZodType<zCore.$ZodNullable>(baseValidator, 'nullable') ? null : undefined;
-			}
-		} else if (!formData.has(prefixedKey) && key in obj) {
-			// continue loop if form input is not found and default value is set
-			continue;
-		} else if (hasZodType<zCore.$ZodBoolean>(validator, 'boolean')) {
-			const val = formData.get(prefixedKey);
-			obj[key] = val === 'true' ? true : val === 'false' ? false : formData.has(prefixedKey);
-		} else if (hasZodType<zCore.$ZodArray>(validator, 'array')) {
-			obj[key] = handleFormDataGetAll(prefixedKey, formData, validator);
+function unwrap(schema: unknown): unknown {
+	while (true) {
+		const kind = schemaType(schema);
+		const def = definition(schema);
+		if (!def) return schema;
+		if (kind === 'optional' || kind === 'nullable' || kind === 'default') {
+			schema = def.innerType;
+		} else if (kind === 'pipe') {
+			schema = def.in;
 		} else {
-			obj[key] = handleFormDataGet(prefixedKey, formData, validator, baseValidator);
+			return schema;
 		}
 	}
-	return obj;
 }
 
-/** Check if formKeys contains an exact key or any keys with the given prefix (for nested objects). */
-function formDataHasKeyOrPrefix(formKeys: string[], key: string): boolean {
-	const prefix = key + '.';
-	return formKeys.some((k) => k === key || k.startsWith(prefix));
+function isDiscriminatedUnion(schema: unknown): boolean {
+	return schemaType(schema) === 'union' && typeof get(definition(schema), 'discriminator') === 'string';
 }
 
-function handleFormDataGetAll(key: string, formData: FormData, validator: zCore.$ZodArray) {
-	const entries = Array.from(formData.getAll(key));
-	const elementValidator = validator._zod.def.element;
-	if (hasZodType<zCore.$ZodNumber>(elementValidator, 'number')) {
-		return entries.map(Number);
-	} else if (hasZodType<zCore.$ZodBoolean>(elementValidator, 'boolean')) {
-		return entries.map((v) => (v === 'true' ? true : v === 'false' ? false : Boolean(v)));
-	}
-	return entries;
+function objectShape(schema: unknown): RecordValue | undefined {
+	const shape = get(definition(schema), 'shape');
+	return isRecord(shape) ? shape : undefined;
 }
 
-function handleFormDataGet(
-	key: string,
-	formData: FormData,
-	validator: unknown,
-	baseValidator: unknown,
-) {
-	const value = formData.get(key);
-	if (!value) {
-		return hasZodType<zCore.$ZodOptional>(baseValidator, 'optional') ? undefined : null;
-	}
-	return hasZodType<zCore.$ZodNumber>(validator, 'number') ? Number(value) : value;
+function getObjectSchema(schema: unknown, formData: FormData): unknown {
+	const base = unwrap(schema);
+	if (schemaType(base) === 'object') return base;
+	if (!isDiscriminatedUnion(base)) return;
+	const def = definition(base);
+	if (!def) return;
+	const discriminator = def.discriminator;
+	if (typeof discriminator !== 'string') return;
+	const value = formData.get(discriminator);
+	if (typeof value !== 'string' || !Array.isArray(def.options)) return;
+	return def.options.find((option) => {
+		const literal = objectShape(option)?.[discriminator];
+		return schemaType(literal) === 'literal' && containsLiteral(literal, value);
+	});
 }
 
-function unwrapBaseObjectSchema(schema: zCore.$ZodType, unparsedInput: FormData) {
-	if (hasZodType<zCore.$ZodPipe>(schema, 'pipe')) {
-		return unwrapBaseObjectSchema(schema._zod.def.in, unparsedInput);
+function convertObject(formData: FormData, schema: unknown, prefix = '') {
+	const result: Record<string, unknown> = {};
+	const keys = [...formData.keys()];
+	const def = definition(schema);
+	const shape = objectShape(schema);
+	if (!def || !shape) return result;
+	if (def.catchall) {
+		for (const [key, value] of formData.entries()) {
+			if (key.startsWith(prefix)) result[key.slice(prefix.length)] = value;
+		}
 	}
-	if (isDiscriminatedUnion(schema)) {
-		const typeKey = schema._zod.def.discriminator;
-		const typeValue = unparsedInput.get(typeKey);
-		if (typeof typeValue !== 'string') return schema;
-
-		const objSchema = schema._zod.def.options.find((option) =>
-			(option as any).def.shape[typeKey].values.has(typeValue),
-		);
-		if (!objSchema) return schema;
-
-		return objSchema;
+	for (const [key, original] of Object.entries(shape)) {
+		const name = prefix + key;
+		let child = original;
+		let defaultValue: unknown;
+		while (isSchema(child)) {
+			const kind = schemaType(child);
+			const childDef = definition(child);
+			if (!childDef) break;
+			if (kind === 'default') {
+				const value = childDef.defaultValue;
+				defaultValue = typeof value === 'function' ? value() : value;
+				child = childDef.innerType;
+			} else if (kind === 'optional' || kind === 'nullable' || kind === 'pipe') {
+				child = childDef.innerType ?? childDef.in;
+			} else {
+				break;
+			}
+		}
+		if (defaultValue !== undefined && !hasKeyOrChild(keys, name)) result[key] = defaultValue;
+		if (schemaType(child) === 'object') {
+			const nestedPrefix = `${name}.`;
+			if (keys.some((formKey) => formKey.startsWith(nestedPrefix))) {
+				result[key] = convertObject(formData, child, nestedPrefix);
+			} else if (!(key in result)) {
+				result[key] = schemaType(original) === 'nullable' ? null : undefined;
+			}
+		} else if (isDiscriminatedUnion(child)) {
+			const union = definition(child);
+			const discriminator = union?.discriminator;
+			const value = typeof discriminator === 'string'
+				? formData.get(`${name}.${discriminator}`)
+				: null;
+			const options = union?.options;
+			const variant = Array.isArray(options) && typeof discriminator === 'string'
+				? options.find((option) => {
+						const literal = objectShape(option)?.[discriminator];
+						return schemaType(literal) === 'literal' && containsLiteral(literal, value);
+					})
+				: undefined;
+			result[key] = variant ? convertObject(formData, variant, `${name}.`) : null;
+		} else if (schemaType(child) === 'boolean') {
+			const value = formData.get(name);
+			result[key] = value === 'true' ? true : value === 'false' ? false : formData.has(name);
+		} else if (schemaType(child) === 'array') {
+			const element = get(definition(child), 'element');
+			result[key] = formData.getAll(name).map((value) => convertValue(value, element));
+		} else if (!(defaultValue !== undefined && !formData.has(name))) {
+			const value = formData.get(name);
+			result[key] = value === null
+				? schemaType(original) === 'optional' ? undefined : null
+				: convertValue(value, child);
+		}
 	}
-	return schema;
+	return result;
+}
+
+function hasKeyOrChild(keys: string[], name: string) {
+	return keys.some((key) => key === name || key.startsWith(`${name}.`));
+}
+
+function containsLiteral(schema: unknown, value: unknown) {
+	const values = get(definition(schema), 'values');
+	return Array.isArray(values)
+		? values.includes(value)
+		: values instanceof Set && values.has(value);
+}
+
+function convertValue(value: FormDataEntryValue, schema: unknown) {
+	if (schemaType(schema) === 'number') return value === '' ? value : Number(value);
+	if (schemaType(schema) === 'boolean') return value === 'true';
+	return value;
 }
