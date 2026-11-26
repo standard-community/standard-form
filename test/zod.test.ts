@@ -12,6 +12,11 @@ testVendorContract('zod', {
 	asyncSchema: z.object({ name: z.string().refine(async (value) => value === 'Ben') }),
 	formDataSchema: z.instanceof(FormData),
 	booleanArraySchema: z.object({ flags: z.array(z.boolean()) }),
+	checkboxSchema: z.object({ checked: z.boolean(), unchecked: z.boolean() }),
+	nullableStringSchema: z.object({
+		value: z.string().nullable(),
+		nested: z.object({ value: z.string().nullable() }),
+	}),
 	nestedSchema: z.object({
 		settings: z.object({ theme: z.string() }).default({ theme: 'dark' }),
 	}),

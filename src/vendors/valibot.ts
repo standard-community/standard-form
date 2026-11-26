@@ -1,5 +1,11 @@
 import type * as v from 'valibot';
-import type { ToFormInputFn } from './utils.js';
+import {
+	hasFormDataKeyWithPrefix,
+	coerceFormNumber,
+	isTrueFormValue,
+	type ToFormInputFn,
+	type Options,
+} from './utils.js';
 
 type AnySchema = v.GenericSchema | v.GenericSchemaAsync;
 type AnyObjectSchema =
@@ -9,10 +15,10 @@ type AnyObjectSchema =
 	| v.ObjectWithRestSchemaAsync<any, any, any>;
 
 export default async function (): Promise<ToFormInputFn> {
-	return (schema, formData) => {
+	return (schema, formData, options) => {
 		if (!isValibotSchema(schema)) return formData;
 		return isObjectSchema(schema)
-			? convertObject(formData, schema)
+			? convertObject(formData, schema, '', options)
 			: formData;
 	};
 }
@@ -50,25 +56,29 @@ function isLiteralSchema(schema: AnySchema): schema is v.LiteralSchema<any, any>
 	return schema.type === 'literal';
 }
 
-function convertObject(formData: FormData, schema: AnyObjectSchema, prefix = '') {
+function convertObject(formData: FormData, schema: AnyObjectSchema, prefix = '', options: Options) {
 	const result: Record<string, unknown> = {};
 	for (const [key, child] of Object.entries(schema.entries)) {
 		const name = prefix + key;
 		if (!isSchema(child)) continue;
 		const base = unwrap(child);
 		if (isObjectSchema(base)) {
-			const nested = convertObject(formData, base, `${name}.`);
-			const hasNestedKeys = [...formData.keys()].some((formKey) => formKey.startsWith(`${name}.`));
+			const nested = convertObject(formData, base, `${name}.`, options);
+			const hasNestedKeys = hasFormDataKeyWithPrefix(formData.keys(), `${name}.`);
 			result[key] = hasNestedKeys ? nested : getDefault(child) ?? nested;
 		} else if (base.type === 'boolean') {
 			const value = formData.get(name);
-			result[key] = value === 'true' ? true : value === 'false' ? false : formData.has(name);
+			result[key] = isTrueFormValue(value)
+				? true
+				: value === 'false'
+					? false
+					: formData.has(name);
 		} else if (base.type === 'number') {
 			const value = formData.get(name);
-			result[key] = value === null || value === '' ? value : Number(value);
+			result[key] = coerceFormNumber(value);
 		} else if (base.type === 'array') {
 			if (!isArraySchema(base)) continue;
-			result[key] = formData.getAll(name).map((value) => convertValue(value, base.item));
+			result[key] = formData.getAll(name).map((value) => convertValue(value, base.item, options));
 		} else if (base.type === 'variant') {
 			if (!isVariantSchema(base)) continue;
 			const variant = base;
@@ -81,10 +91,10 @@ function convertObject(formData: FormData, schema: AnyObjectSchema, prefix = '')
 					discriminatorSchema.literal === discriminator;
 			});
 			result[key] = option && isObjectSchema(option)
-				? convertObject(formData, option, `${name}.`)
+				? convertObject(formData, option, `${name}.`, options)
 				: null;
 		} else {
-			result[key] = convertValue(formData.get(name), base);
+			result[key] = convertValue(formData.get(name), base, options);
 		}
 	}
 	if (schema.type === 'object_with_rest') {
@@ -110,10 +120,17 @@ function getDefault(schema: AnySchema) {
 	return 'default' in schema ? schema.default : undefined;
 }
 
-function convertValue(value: FormDataEntryValue | null, schema: AnySchema) {
+function convertValue(value: FormDataEntryValue | null, schema: AnySchema, options: Options) {
 	const base = unwrap(schema);
+	if (options.convertEmptyStringsToNull && value === '' && base.type === 'string') return null;
 	if (value === null) return getDefault(schema) ?? null;
-	if (base.type === 'number') return Number(value);
-	if (base.type === 'boolean') return value === 'true' ? true : value === 'false' ? false : Boolean(value);
+	if (base.type === 'number') return coerceFormNumber(value);
+	if (base.type === 'boolean') {
+		return isTrueFormValue(value)
+			? true
+			: value === 'false'
+				? false
+				: Boolean(value);
+	}
 	return value;
 }

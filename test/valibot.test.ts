@@ -14,6 +14,11 @@ testVendorContract('valibot', {
 	}),
 	formDataSchema: v.instance(FormData),
 	booleanArraySchema: v.object({ flags: v.array(v.boolean()) }),
+	checkboxSchema: v.object({ checked: v.boolean(), unchecked: v.boolean() }),
+	nullableStringSchema: v.object({
+		value: v.nullable(v.string()),
+		nested: v.object({ value: v.nullable(v.string()) }),
+	}),
 	nestedSchema: v.object({
 		settings: v.optional(v.object({ theme: v.string() }), { theme: 'dark' }),
 	}),

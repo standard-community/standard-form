@@ -8,7 +8,12 @@ export type VendorContract = {
 	invalidSchema: StandardSchemaV1<unknown, unknown>;
 	asyncSchema: StandardSchemaV1<unknown, { name: string }> | null;
 	formDataSchema: StandardSchemaV1<unknown, FormData>;
-	booleanArraySchema: StandardSchemaV1<unknown, { flags: boolean[] }>;
+  booleanArraySchema: StandardSchemaV1<unknown, { flags: boolean[] }>;
+  checkboxSchema: StandardSchemaV1<unknown, { checked: boolean; unchecked: boolean }>;
+  nullableStringSchema: StandardSchemaV1<
+		unknown,
+		{ value: string | null; nested: { value: string | null } }
+  >;
 	nestedSchema: StandardSchemaV1<unknown, { settings: { theme: string } }>;
 	discriminatedUnionSchema: StandardSchemaV1<
 		unknown,
@@ -85,6 +90,31 @@ export function testVendorContract(name: string, schemas: VendorContract) {
 
 			assert.equal(result.issues, undefined);
 			assert.deepEqual(result.value, { flags: [false, true, false] });
+		});
+
+		it('coerces checked and unchecked checkbox values', async () => {
+			for (const value of ['on', '1', 'yes', 'true']) {
+				const formData = new FormData();
+				formData.set('checked', value);
+
+				const result = await parseFormData(schemas.checkboxSchema, formData);
+
+				assert.equal(result.issues, undefined);
+				assert.deepEqual(result.value, { checked: true, unchecked: false });
+			}
+		});
+
+		it('converts empty strings to null when requested', async () => {
+			const formData = new FormData();
+			formData.set('value', '');
+			formData.set('nested.value', '');
+
+			const result = await parseFormData(schemas.nullableStringSchema, formData, {
+				convertEmptyStringsToNull: true,
+			});
+
+			assert.equal(result.issues, undefined);
+			assert.deepEqual(result.value, { value: null, nested: { value: null } });
 		});
 
 		it('coerces nested objects when keys are present and uses defaults when absent', async () => {
