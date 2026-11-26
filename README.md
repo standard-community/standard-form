@@ -28,6 +28,8 @@ Handlers are resolved from the schema's `~standard.vendor` and imported lazily, 
 | Vendor | Support |
 | ------ | ------- |
 | `zod` | Built in for Zod 4 and higher |
+| `valibot` | Built in |
+| `arktype` | Built in |
 
 Other vendors throw an `UnsupportedVendorError` until you register a handler:
 

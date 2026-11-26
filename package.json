@@ -52,21 +52,51 @@
         "types": "./dist/vendors/zod.d.cts",
         "default": "./dist/vendors/zod.cjs"
       }
+    },
+    "./valibot": {
+      "import": {
+        "types": "./dist/vendors/valibot.d.ts",
+        "default": "./dist/vendors/valibot.js"
+      },
+      "require": {
+        "types": "./dist/vendors/valibot.d.cts",
+        "default": "./dist/vendors/valibot.cjs"
+      }
+    },
+    "./arktype": {
+      "import": {
+        "types": "./dist/vendors/arktype.d.ts",
+        "default": "./dist/vendors/arktype.js"
+      },
+      "require": {
+        "types": "./dist/vendors/arktype.d.cts",
+        "default": "./dist/vendors/arktype.cjs"
+      }
     }
   },
   "peerDependencies": {
     "@standard-schema/spec": "^1.1.0",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "valibot": "^1.5.0",
+    "arktype": "^2.2.10"
   },
   "peerDependenciesMeta": {
     "zod": {
+      "optional": true
+    },
+    "valibot": {
+      "optional": true
+    },
+    "arktype": {
       "optional": true
     }
   },
   "devDependencies": {
     "@standard-schema/spec": "^1.1.0",
+    "arktype": "^2.2.10",
     "pkgroll": "^2.29.1",
     "typescript": "6.0.3",
+    "valibot": "^1.5.0",
     "vitest": "^5.1.1",
     "zod": "^4.6.7"
   },
