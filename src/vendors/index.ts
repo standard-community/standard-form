@@ -12,6 +12,12 @@ export const getToFormInputFn = async (vendor: string): Promise<ToFormInputFn> =
 		case 'zod':
 			vendorFnPromise = (await import('./zod.js')).default();
 			break;
+		case 'valibot':
+			vendorFnPromise = (await import('./valibot.js')).default();
+			break;
+		case 'arktype':
+			vendorFnPromise = (await import('./arktype.js')).default();
+			break;
 		default:
 			throw new UnsupportedVendorError(vendor);
 	}

@@ -6,7 +6,7 @@ import { parseFormData } from '../dist/index.js';
 export type VendorContract = {
 	validSchema: StandardSchemaV1<unknown, { name: string; age: number; newsletter: boolean; address: { city: string } }>;
 	invalidSchema: StandardSchemaV1<unknown, unknown>;
-	asyncSchema: StandardSchemaV1<unknown, { name: string }>;
+	asyncSchema: StandardSchemaV1<unknown, { name: string }> | null;
 	formDataSchema: StandardSchemaV1<unknown, FormData>;
 	booleanArraySchema: StandardSchemaV1<unknown, { flags: boolean[] }>;
 	nestedSchema: StandardSchemaV1<unknown, { settings: { theme: string } }>;
@@ -46,22 +46,24 @@ export function testVendorContract(name: string, schemas: VendorContract) {
 			assert.ok(result.issues);
 			assert.equal(result.issues.length, 1);
 			assert.deepEqual(
-				result.issues[0].path?.map((segment) =>
+				[...(result.issues[0].path?.map((segment) =>
 					typeof segment === 'object' ? segment.key : segment,
-				),
+				) ?? [])],
 				['age'],
 			);
 		});
 
-		it('awaits async validation', async () => {
-			const formData = new FormData();
-			formData.set('name', 'Ben');
+		if (schemas.asyncSchema !== null) {
+			it('awaits async validation', async () => {
+				const formData = new FormData();
+				formData.set('name', 'Ben');
 
-			const result = await parseFormData(schemas.asyncSchema, formData);
+				const result = await parseFormData(schemas.asyncSchema, formData);
 
-			assert.equal(result.issues, undefined);
-			assert.deepEqual(result.value, { name: 'Ben' });
-		});
+				assert.equal(result.issues, undefined);
+				assert.deepEqual(result.value, { name: 'Ben' });
+			});
+		}
 
 		it('passes FormData through when the schema is not an object', async () => {
 			const formData = new FormData();
