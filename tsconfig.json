@@ -24,10 +24,7 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
-    "paths": {
-      "~/*": ["./src/*"]
-    }
+    "skipLibCheck": true
   },
   "include": ["./src/**/*", "./tests/**/*"]
 }
