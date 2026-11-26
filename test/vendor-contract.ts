@@ -8,6 +8,13 @@ export type VendorContract = {
 	invalidSchema: StandardSchemaV1<unknown, unknown>;
 	asyncSchema: StandardSchemaV1<unknown, { name: string }>;
 	formDataSchema: StandardSchemaV1<unknown, FormData>;
+	booleanArraySchema: StandardSchemaV1<unknown, { flags: boolean[] }>;
+	nestedSchema: StandardSchemaV1<unknown, { settings: { theme: string } }>;
+	discriminatedUnionSchema: StandardSchemaV1<
+		unknown,
+		{ contact: { type: 'email'; email: string } | { type: 'phone'; phone: string } }
+	>;
+	passthroughSchema: StandardSchemaV1<unknown, { expected: number; [key: string]: unknown }>;
 };
 
 export function testVendorContract(name: string, schemas: VendorContract) {
@@ -64,6 +71,54 @@ export function testVendorContract(name: string, schemas: VendorContract) {
 
 			assert.equal(result.issues, undefined);
 			assert.equal(result.value, formData);
+		});
+
+		it('coerces boolean arrays without losing false values', async () => {
+			const formData = new FormData();
+			formData.append('flags', 'false');
+			formData.append('flags', 'true');
+			formData.append('flags', 'false');
+
+			const result = await parseFormData(schemas.booleanArraySchema, formData);
+
+			assert.equal(result.issues, undefined);
+			assert.deepEqual(result.value, { flags: [false, true, false] });
+		});
+
+		it('coerces nested objects when keys are present and uses defaults when absent', async () => {
+			const withNestedKeys = new FormData();
+			withNestedKeys.set('settings.theme', 'light');
+
+			const parsedNested = await parseFormData(schemas.nestedSchema, withNestedKeys);
+			assert.equal(parsedNested.issues, undefined);
+			assert.deepEqual(parsedNested.value, { settings: { theme: 'light' } });
+
+			const withoutNestedKeys = new FormData();
+			const parsedDefault = await parseFormData(schemas.nestedSchema, withoutNestedKeys);
+			assert.equal(parsedDefault.issues, undefined);
+			assert.deepEqual(parsedDefault.value, { settings: { theme: 'dark' } });
+		});
+
+		it('coerces the matching nested discriminated union variant', async () => {
+			const formData = new FormData();
+			formData.set('contact.type', 'phone');
+			formData.set('contact.phone', '555-1234');
+
+			const result = await parseFormData(schemas.discriminatedUnionSchema, formData);
+
+			assert.equal(result.issues, undefined);
+			assert.deepEqual(result.value, { contact: { type: 'phone', phone: '555-1234' } });
+		});
+
+		it('preserves unknown fields when the object schema allows passthrough', async () => {
+			const formData = new FormData();
+			formData.set('expected', '42');
+			formData.set('unexpected', 'extra');
+
+			const result = await parseFormData(schemas.passthroughSchema, formData);
+
+			assert.equal(result.issues, undefined);
+			assert.deepEqual(result.value, { expected: 42, unexpected: 'extra' });
 		});
 	});
 }
